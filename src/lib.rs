@@ -75,8 +75,8 @@ pub extern "C" fn advance_tick(entity_id: u32, direction: InputDirection) {
     let mut sim = SIM.lock().unwrap();
 
     if let Some(position) = sim.positions.get_mut(&entity_id) {
-        position.x = delta.x;
-        position.y = delta.y;
+        position.x += delta.x;
+        position.y += delta.y;
     }
     
     let current_tick = sim.current_tick;
