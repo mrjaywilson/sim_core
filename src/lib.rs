@@ -44,7 +44,7 @@ static SIM: Lazy<Mutex<Simulation>> = Lazy::new(|| {
        positions: HashMap::new(),
        history: Vec::new(),
        inputs: Vec::new(),
-   }) 
+   })
 });
 
 #[no_mangle]
@@ -78,7 +78,7 @@ pub extern "C" fn advance_tick(entity_id: u32, direction: InputDirection) {
         position.x += delta.x;
         position.y += delta.y;
     }
-    
+
     let current_tick = sim.current_tick;
     let positions = sim.positions.clone();
 
@@ -114,9 +114,57 @@ pub extern "C" fn get_position_at_tick(entity_id: u32, index: usize) -> Vec2 {
 
     if index < sim.history.len() {
         let tick_state = &sim.history[index];
-        
+
         tick_state.positions.get(&entity_id).copied().unwrap_or(Vec2 { x: 0.0, y: 0.0 })
     } else {
         sim.positions.get(&entity_id).copied().unwrap_or(Vec2 { x: 0.0, y: 0.0 })
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn rollback_to_tick(tick_index: usize) {
+    let mut sim = SIM.lock().unwrap();
+
+    sim.positions.clear();
+
+    if tick_index < sim.history.len() {
+        sim.positions = sim.history[tick_index].positions.clone();
+    }
+
+    sim.history.truncate(tick_index);
+    sim.current_tick = tick_index;
+
+    let inputs_to_replay: Vec<_> = sim
+        .inputs
+        .iter()
+        .filter(|input| input.tick >= tick_index)
+        .cloned()
+        .collect();
+
+    for input in inputs_to_replay {
+        let delta = match input.direction {
+            InputDirection::Up => Vec2 { x: 0.0, y: 1.0 },
+            InputDirection::Down => Vec2 { x: 0.0, y: -1.0 },
+            InputDirection::Left => Vec2 { x: -1.0, y: 0.0 },
+            InputDirection::Right => Vec2 { x: 1.0, y: 0.0 },
+            InputDirection::None => Vec2 { x: 0.0, y: 0.0 },
+        };
+
+        if let Some(position) = sim.positions.get_mut(&input.entity_id) {
+            position.x += delta.x;
+            position.y += delta.y;
+        } else {
+            sim.positions.insert(input.entity_id, delta);
+        }
+
+        let current_tick = sim.current_tick;
+        let positions = sim.positions.clone();
+
+        sim.history.push(TickState {
+            tick: current_tick,
+            positions,
+        });
+
+        sim.current_tick += 1;
     }
 }
