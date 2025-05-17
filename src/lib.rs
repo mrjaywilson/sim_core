@@ -1,5 +1,6 @@
 use std::sync::Mutex;
 use once_cell::sync::Lazy;
+use std::collections::HashMap;
 
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -18,32 +19,51 @@ pub enum InputDirection {
     Right = 4,
 }
 
-struct Tick {
-    input: InputDirection,
-    position: Vec2,
+#[derive(Copy, Clone)]
+struct TickInput {
+    tick: usize,
+    entity_id: u32,
+    direction: InputDirection,
+}
+
+struct TickState {
+    tick: usize,
+    positions: HashMap<u32, Vec2>,
 }
 
 struct Simulation {
-    state: Vec2,
-    ticks: Vec<Tick>,
+    current_tick: usize,
+    positions: HashMap<u32, Vec2>,
+    history: Vec<TickState>,
+    inputs: Vec<TickInput>,
 }
 
 static SIM: Lazy<Mutex<Simulation>> = Lazy::new(|| {
    Mutex::new(Simulation {
-       state: Vec2 { x: 0.0, y: 0.0 },
-       ticks: Vec::new(),
+       current_tick: 0,
+       positions: HashMap::new(),
+       history: Vec::new(),
+       inputs: Vec::new(),
    }) 
 });
 
 #[no_mangle]
 pub extern "C" fn reset_simulation() {
     let mut sim = SIM.lock().unwrap();
-    sim.state = Vec2 { x: 0.0, y: 0.0 };
-    sim.ticks.clear();
+    sim.current_tick = 0;
+    sim.positions.clear();
+    sim.history.clear();
+    sim.inputs.clear();
 }
 
 #[no_mangle]
-pub extern "C" fn advance_tick(direction: InputDirection) {
+pub extern "C" fn register_entity(entity_id: u32, x: f32, y: f32) {
+    let mut sim = SIM.lock().unwrap();
+    sim.positions.insert(entity_id, Vec2 { x, y });
+}
+
+#[no_mangle]
+pub extern "C" fn advance_tick(entity_id: u32, direction: InputDirection) {
     let delta = match direction {
         InputDirection::Up => Vec2 { x: 0.0, y: 1.0 },
         InputDirection::Down => Vec2 { x: 0.0, y: -1.0 },
@@ -53,36 +73,50 @@ pub extern "C" fn advance_tick(direction: InputDirection) {
     };
 
     let mut sim = SIM.lock().unwrap();
-    sim.state.x += delta.x;
-    sim.state.y += delta.y;
 
-    let current_position = sim.state;
+    if let Some(position) = sim.positions.get_mut(&entity_id) {
+        position.x = delta.x;
+        position.y = delta.y;
+    }
+    
+    let current_tick = sim.current_tick;
+    let positions = sim.positions.clone();
 
-    sim.ticks.push(Tick {
-        input: direction,
-        position: current_position,
-    })
+    sim.inputs.push(TickInput {
+        tick: current_tick,
+        entity_id,
+        direction,
+    });
+
+    sim.history.push(TickState {
+       tick: current_tick,
+        positions,
+    });
+
+    sim.current_tick += 1;
 }
 
 #[no_mangle]
-pub extern "C" fn get_position() -> Vec2 {
+pub extern "C" fn get_position(entity_id: u32) -> Vec2 {
     let sim = SIM.lock().unwrap();
-    sim.state
+    sim.positions.get(&entity_id).copied().unwrap_or(Vec2 { x: 0.0, y: 0.0 })
 }
 
 #[no_mangle]
 pub extern "C" fn get_tick_count() -> usize {
     let sim = SIM.lock().unwrap();
-    sim.ticks.len()
+    sim.history.len()
 }
 
 #[no_mangle]
-pub extern "C" fn get_position_at_tick(index: usize) -> Vec2 {
+pub extern "C" fn get_position_at_tick(entity_id: u32, index: usize) -> Vec2 {
     let sim = SIM.lock().unwrap();
 
-    if index < sim.ticks.len() {
-        sim.ticks[index].position
+    if index < sim.history.len() {
+        let tick_state = &sim.history[index];
+        
+        tick_state.positions.get(&entity_id).copied().unwrap_or(Vec2 { x: 0.0, y: 0.0 })
     } else {
-        sim.state
+        sim.positions.get(&entity_id).copied().unwrap_or(Vec2 { x: 0.0, y: 0.0 })
     }
 }
